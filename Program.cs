@@ -28,7 +28,7 @@ namespace ResRegV1cons
                 int resourceCount = Convert.ToInt32(Console.ReadLine());
                 for(int i = 0; i < resourceCount; i++)
                 {
-                    double breakProbability = Program.rnd.NextDouble() / 100; //TODO: могут быть очень большие вероятности, уменьшить
+                    double breakProbability = Program.rnd.NextDouble() / 10; //TODO: могут быть очень большие вероятности, уменьшить
                     int repairTimeSec = Program.rnd.Next(1, 30);
                     List<UserRequest> queue = new List<UserRequest>();
                     Resource r = new Resource(RESOURCE_STATE.FREE, breakProbability, repairTimeSec, 0, queue);
@@ -119,15 +119,18 @@ namespace ResRegV1cons
     }
     static class Model
     {
+        public static int curId;
         public static List<Resource> vRes_s; //Модель набора ресурсов
 
         public static void Occupy(string cn)
         {
-            if ((Convert.ToInt16(cn) > vRes_s.Count) | (Convert.ToInt16(cn) < 0)) throw new ResIdInvalid();
+            if ((Convert.ToInt16(cn) > vRes_s.Count) | (Convert.ToInt16(cn) <= 0)) throw new ResIdInvalid();
             int resourceId = Convert.ToInt16(cn);
 
             UserRequest request = new UserRequest(resourceId, 60); //TODO: это надо вводить
             vRes_s[resourceId - 1].vReqQueue.Add(request);
+
+            Program.queue.Add(new Tuple<int, int, int>(request.maxWaitTimeSec, request.id, request.resourceId));
 
             if (vRes_s[resourceId - 1].state == RESOURCE_STATE.FREE)
             {
@@ -142,7 +145,7 @@ namespace ResRegV1cons
 
         public static void Free(string cn)
         {
-            if ((Convert.ToInt16(cn) > vRes_s.Count) | (Convert.ToInt16(cn) < 0)) throw new ResIdInvalid();
+            if ((Convert.ToInt16(cn) > vRes_s.Count) | (Convert.ToInt16(cn) <= 0)) throw new ResIdInvalid();
             int resourceId = Convert.ToInt16(cn);
 
             if (vRes_s[resourceId - 1].state == RESOURCE_STATE.FREE) throw new ResWasFree();
@@ -150,6 +153,7 @@ namespace ResRegV1cons
             {
                 if (vRes_s[resourceId - 1].vReqQueue.Count == 0) throw new ResWasFree();
 
+                Program.queue.Remove(new Tuple<int, int, int>(60, vRes_s[resourceId - 1].vReqQueue[0].id, resourceId - 1));
                 vRes_s[resourceId - 1].vReqQueue.RemoveAt(0);
             }
 
@@ -239,7 +243,7 @@ namespace ResRegV1cons
             if(randomNumber <= breakProbability)
             {
                 timer.Enabled = false;
-                Console.WriteLine("Ресурс сломался, время починки = " + repairTimeSec + " секунд");
+                Console.WriteLine("Ресурс " + (Model.vRes_s.IndexOf(this) + 1) + " сломался, время починки = " + repairTimeSec + " секунд");
                 if(state == RESOURCE_STATE.BUSY)
                 {
                     Console.WriteLine("Запрос перемещён в очередь.");
@@ -262,12 +266,12 @@ namespace ResRegV1cons
             stopwatch.Reset();
 
             timer.Enabled = false;
-            Console.WriteLine("Ресурс починен");
+            Console.WriteLine("Ресурс "+ (Model.vRes_s.IndexOf(this) + 1) + " починен");
             state = RESOURCE_STATE.FREE;
 
             if(vReqQueue.Count != 0)
             {
-                Console.WriteLine("Запрос занял ресурс");
+                Console.WriteLine("Запрос занял ресурс " + (Model.vRes_s.IndexOf(this) + 1));
                 state = RESOURCE_STATE.BUSY;
             }
 
@@ -296,11 +300,13 @@ namespace ResRegV1cons
     {
         public int resourceId { get; }
         public int maxWaitTimeSec { get; }
+        public int id { get; }
 
         public UserRequest(int resourceId, int maxWaitTimeSec)
         {
             this.resourceId = resourceId;
             this.maxWaitTimeSec = maxWaitTimeSec;
+            this.id = ++Model.curId;
         }
     }
 
@@ -308,10 +314,18 @@ namespace ResRegV1cons
     {
         public static Random rnd;
         public static bool isPaused;
+        public static List<Tuple<int, int, int>> queue; //Первый элемент - сколько времени запросу ещё осталось
+                                                        //Второй - id запроса, третий - ресурс, на который запрос претендует
+        public static System.Timers.Timer expirationTimer;
 
         static void Main(string[] args)
         {
             rnd = new Random();
+            queue = new List<Tuple<int, int, int>>();
+            expirationTimer = new System.Timers.Timer();
+            expirationTimer.AutoReset = true;
+            expirationTimer.Elapsed += RequestExpired;
+
             string Command;
             while (!SetUp.On()) ;
 
@@ -347,6 +361,11 @@ namespace ResRegV1cons
                         pauseAll();
                         Console.WriteLine("Введите номер ресурса:");
                         Model.Occupy(Console.ReadLine());
+
+                        queue.Sort((x, y) => x.Item1.CompareTo(y.Item1));
+                        expirationTimer.Interval = queue[0].Item1 * 1000;
+                        expirationTimer.Start();
+
                     }
 
                     if (Command == "FREE")
@@ -354,6 +373,11 @@ namespace ResRegV1cons
                         pauseAll();
                         Console.WriteLine("Введите номер ресурса:");
                         Model.Free(Console.ReadLine());
+
+                        queue.Sort((x, y) => x.Item1.CompareTo(y.Item1));
+                        expirationTimer.Stop();
+                        expirationTimer.Interval = queue[0].Item1 * 1000; //TODO: проверить
+                        expirationTimer.Start();
                     }
                 }
                 catch (OverflowException) { Console.WriteLine("Такого ресурса нет."); }
@@ -376,7 +400,7 @@ namespace ResRegV1cons
             {
                 Model.vRes_s[i].stopwatch.Stop();
                 Model.vRes_s[i].timer.Enabled = false;
-                Console.WriteLine("Ресурс " + i + " остановлен, stopwatch = " + Model.vRes_s[i].stopwatch.Elapsed);
+                //Console.WriteLine("Ресурс " + i + " остановлен, stopwatch = " + Model.vRes_s[i].stopwatch.Elapsed);
             }
         }
 
@@ -385,11 +409,18 @@ namespace ResRegV1cons
             for (int i = 0; i < Model.vRes_s.Count; i++)
             {
                 Model.vRes_s[i].timer.Enabled = true;
-                Model.vRes_s[i].timer.Interval = Model.vRes_s[i].repairTimeSec - Model.vRes_s[i].stopwatch.Elapsed.Seconds;
-                Console.WriteLine("Ресурс " + i + " возобновлён, время ожидания = " + (Model.vRes_s[i].repairTimeSec - Model.vRes_s[i].stopwatch.Elapsed.Seconds));
+                Model.vRes_s[i].timer.Interval = (Model.vRes_s[i].repairTimeSec - Model.vRes_s[i].stopwatch.Elapsed.Seconds) * 1000;
+                //Console.WriteLine("Ресурс " + i + " возобновлён, время ожидания = " + (Model.vRes_s[i].repairTimeSec - Model.vRes_s[i].stopwatch.Elapsed.Seconds) * 1000);
             }
             Program.isPaused = false;
             Console.WriteLine("Resumed");
+        }
+
+        private static void RequestExpired(Object source, System.Timers.ElapsedEventArgs e)
+        {
+            pauseAll();
+            Console.WriteLine("Запрос истёк: id = " + Program.queue[0].Item2 + " ; ресурс, на который он был в очереди - " + Program.queue[0].Item3);
+            resumeAll();
         }
     }
 }
