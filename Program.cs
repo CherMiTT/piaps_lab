@@ -28,10 +28,10 @@ namespace ResRegV1cons
                 int resourceCount = Convert.ToInt32(Console.ReadLine());
                 for(int i = 0; i < resourceCount; i++)
                 {
-                    double breakProbability = Program.rnd.NextDouble() / 10; //TODO: могут быть очень большие вероятности, уменьшить
+                    double breakProbability = Program.rnd.NextDouble() / 100; //TODO: могут быть очень большие вероятности, уменьшить
                     int repairTimeSec = Program.rnd.Next(1, 30);
                     List<UserRequest> queue = new List<UserRequest>();
-                    Resource r = new Resource(RESOURCE_STATE.FREE, breakProbability, repairTimeSec, 0, queue);
+                    Resource r = new Resource(RESOURCE_STATE.FREE, breakProbability, repairTimeSec, queue);
                     Model.vRes_s.Add(r);
                 }
             }
@@ -52,23 +52,37 @@ namespace ResRegV1cons
                 using (var reader = new StreamReader(SetUp.Path))
                 {
                     string line;
-                    while ((line = reader.ReadLine()) != null)
+                    line = reader.ReadLine();
+                    string[] p = line.Split(new[] { ' ' }); //ExpirationQueue
+                    Console.WriteLine("Очередь запросов:");
+                    for(int i = 0; i < Convert.ToInt32(p[0]); i++)
+                    {
+                        int time = Convert.ToInt32(p[1 + 4 * i]);
+                        int id = Convert.ToInt32(p[2 + 4 * i]);
+                        int resourceId = Convert.ToInt32(p[3 + 4 * i]);
+                        int maxWaitTime = Convert.ToInt32(p[4 + 4 * i]);
+                        UserRequest request = new UserRequest(resourceId, maxWaitTime);
+                        Program.expirationQueue.Add(new Tuple<int, UserRequest>(time, request));
+                        Console.WriteLine("Запрос id = " + id + "; resourceId = " + resourceId + "; maxWaitTime = " + maxWaitTime + "; remainingTime = " + time);
+                    }
+
+                    while ((line = reader.ReadLine()) != null) //Ресурсы
                     {
                         string[] parts = line.Split(new[] { ' ' });
                         RESOURCE_STATE state = (RESOURCE_STATE)Enum.Parse(typeof(RESOURCE_STATE), parts[0], true);
                         double breakProbability = Convert.ToDouble(parts[1]);
                         int repairTime = Convert.ToInt32(parts[2]);
-                        int curTimeSec = Convert.ToInt32(parts[3]);
                         List<UserRequest> queue = new List<UserRequest>();
-                        int c = Convert.ToInt32(parts[4]);
+                        int c = Convert.ToInt32(parts[3]);
                         for(int j = 0; j < c; j++)
                         {
-                            int resourceId = Convert.ToInt32(parts[5 + 2 * j]);
-                            int maxWaitTime = Convert.ToInt32(parts[6 + 2 * j]);
+                            int id = Convert.ToInt32(parts[4 + 3 * j]);
+                            int resourceId = Convert.ToInt32(parts[5 + 3 * j]);
+                            int maxWaitTime = Convert.ToInt32(parts[6 + 3 * j]);
                             UserRequest request = new UserRequest(resourceId, maxWaitTime);
                             queue.Add(request);
                         }
-                        Resource r = new Resource(state, breakProbability, repairTime, curTimeSec, queue);
+                        Resource r = new Resource(state, breakProbability, repairTime, queue);
                         Model.vRes_s.Add(r);
                     }
                 }
@@ -127,10 +141,8 @@ namespace ResRegV1cons
             if ((Convert.ToInt16(cn) > vRes_s.Count) | (Convert.ToInt16(cn) <= 0)) throw new ResIdInvalid();
             int resourceId = Convert.ToInt16(cn);
 
-            UserRequest request = new UserRequest(resourceId, 60); //TODO: это надо вводить
+            UserRequest request = new UserRequest(resourceId, 30); //TODO: это надо вводить
             vRes_s[resourceId - 1].vReqQueue.Add(request);
-
-            Program.queue.Add(new Tuple<int, int, int>(request.maxWaitTimeSec, request.id, request.resourceId));
 
             if (vRes_s[resourceId - 1].state == RESOURCE_STATE.FREE)
             {
@@ -139,6 +151,7 @@ namespace ResRegV1cons
             }
             else
             {
+                Program.expirationQueue.Add(new Tuple<int, UserRequest>(request.maxWaitTimeSec, request));
                 Console.WriteLine("Запрос на ресурс добавлен в очередь.");
             }
         }
@@ -153,7 +166,7 @@ namespace ResRegV1cons
             {
                 if (vRes_s[resourceId - 1].vReqQueue.Count == 0) throw new ResWasFree();
 
-                Program.queue.Remove(new Tuple<int, int, int>(60, vRes_s[resourceId - 1].vReqQueue[0].id, resourceId - 1));
+                Program.deleteRequestFromExpirationQueue(vRes_s[resourceId - 1].vReqQueue[0]);
                 vRes_s[resourceId - 1].vReqQueue.RemoveAt(0);
             }
 
@@ -161,7 +174,10 @@ namespace ResRegV1cons
             {
                 vRes_s[resourceId - 1].state = RESOURCE_STATE.FREE;
                 Console.WriteLine("Ресурс освобождён");
+
+                Program.deleteRequestFromExpirationQueue(vRes_s[resourceId - 1].vReqQueue[0]);
                 vRes_s[resourceId - 1].vReqQueue.RemoveAt(0);
+
                 if (vRes_s[resourceId - 1].vReqQueue.Count != 0)
                 {
                     Console.WriteLine("Запрос из очереди занял ресурс");
@@ -184,6 +200,14 @@ namespace ResRegV1cons
         {
             using (StreamWriter writetext = new StreamWriter(SetUp.Path))
             {
+                string str = "";
+                str += Program.expirationQueue.Count;
+                for (int j = 0; j < Program.expirationQueue.Count; j++) //Все запросы в очереди в виде пар "id maxWaitSec"
+                {
+                    str += " " + Program.expirationQueue[j].Item1.ToString() + " " + Program.expirationQueue[j].Item2.id + " " + Program.expirationQueue[j].Item2.resourceId + " " + Program.expirationQueue[j].Item2.maxWaitTimeSec;
+                }
+                writetext.WriteLine(str);
+
                 for (int i = 0; i < vRes_s.Count; i++) //Цикл по всем ресурсам
                 {
                     writetext.WriteLine(vRes_s[i].ToString());
@@ -192,139 +216,19 @@ namespace ResRegV1cons
         }
     }
 
-    enum RESOURCE_STATE
-    {
-        FREE = 1,
-        BUSY = 2,
-        BROKEN = 3
-    }
-
-
-    class Resource
-    {
-        public RESOURCE_STATE state; //Состояние ресурса
-        public double breakProbability {get;} //Вероятность поломки ресурса [0; 1]
-        public int repairTimeSec { get; } //Время, нужное починки ресурса в секундах
-        public int curTimeSec { get; } //Внутренний счётчик времени
-        public List<UserRequest> vReqQueue; //Очередь запросов к этому ресурсу
-        public System.Timers.Timer timer;
-        public Stopwatch stopwatch; //Нужно для корректной паузы таймера
-
-        public Resource(RESOURCE_STATE curState, double breakProbability, int repairTimeSec, int curTimeSec, List<UserRequest> vReqQueue)
-        {
-            state = curState;
-            this.breakProbability = breakProbability;
-            this.repairTimeSec = repairTimeSec;
-            this.curTimeSec = curTimeSec;
-            this.vReqQueue = vReqQueue;
-
-            timer = new System.Timers.Timer();
-            //TODO: проверить логику
-            if (state == RESOURCE_STATE.FREE || state == RESOURCE_STATE.BUSY) //Если ресурс не сломан
-            {
-                timer.Interval = 1000; //Запустить ежесекундный таймер (для проверки, сломается ли ресурс)
-                timer.Elapsed += OnTickEvent;
-            } 
-            else //Если ресурс сломан
-            {
-                timer.Interval = (repairTimeSec - curTimeSec) * 1000;
-                timer.Elapsed += OnRepaired;
-            }
-            timer.AutoReset = true;
-            timer.Enabled = true; //Запускаем таймер
-
-            stopwatch = new Stopwatch();
-        }
-        
-        // Метод, вызываемый каждую секунду. Проверяет, сломается ли ресурс.
-        private void OnTickEvent(Object source, System.Timers.ElapsedEventArgs e)
-        {
-            double randomNumber = Program.rnd.NextDouble();
-            if(randomNumber <= breakProbability)
-            {
-                timer.Enabled = false;
-                Console.WriteLine("Ресурс " + (Model.vRes_s.IndexOf(this) + 1) + " сломался, время починки = " + repairTimeSec + " секунд");
-                if(state == RESOURCE_STATE.BUSY)
-                {
-                    Console.WriteLine("Запрос перемещён в очередь.");
-                }
-                state = RESOURCE_STATE.BROKEN;
-
-                timer.Elapsed -= OnTickEvent;
-                timer.Elapsed += OnRepaired;
-                stopwatch.Reset();
-                stopwatch.Start();
-                timer.Enabled = true;
-                timer.Interval = repairTimeSec * 1000;
-            }
-        }
-
-        // Метод, вызываемый, когда сломанный ресурс починен.
-        private void OnRepaired(Object source, System.Timers.ElapsedEventArgs e)
-        {
-            stopwatch.Stop();
-            stopwatch.Reset();
-
-            timer.Enabled = false;
-            Console.WriteLine("Ресурс "+ (Model.vRes_s.IndexOf(this) + 1) + " починен");
-            state = RESOURCE_STATE.FREE;
-
-            if(vReqQueue.Count != 0)
-            {
-                Console.WriteLine("Запрос занял ресурс " + (Model.vRes_s.IndexOf(this) + 1));
-                state = RESOURCE_STATE.BUSY;
-            }
-
-            timer.Elapsed -= OnRepaired;
-            timer.Elapsed += OnTickEvent;
-            timer.Enabled = true;
-            timer.Interval = 1000;
-        }
-
-        override public string ToString()
-        {
-            string str = state.ToString();
-            str += " " + breakProbability;
-            str += " " + repairTimeSec;
-            str += " " + curTimeSec;
-            str += " " + vReqQueue.Count;
-            for (int j = 0; j < vReqQueue.Count; j++) //Все запросы в очереди в виде пар "id maxWaitSec"
-            {
-                str += " " + vReqQueue[j].resourceId + " " + vReqQueue[j].maxWaitTimeSec;
-            }
-            return str;
-        }
-    }
-
-    class UserRequest
-    {
-        public int resourceId { get; }
-        public int maxWaitTimeSec { get; }
-        public int id { get; }
-
-        public UserRequest(int resourceId, int maxWaitTimeSec)
-        {
-            this.resourceId = resourceId;
-            this.maxWaitTimeSec = maxWaitTimeSec;
-            this.id = ++Model.curId;
-        }
-    }
-
     class Program
     {
         public static Random rnd;
         public static bool isPaused;
-        public static List<Tuple<int, int, int>> queue; //Первый элемент - сколько времени запросу ещё осталось
-                                                        //Второй - id запроса, третий - ресурс, на который запрос претендует
-        public static System.Timers.Timer expirationTimer;
 
         static void Main(string[] args)
         {
             rnd = new Random();
-            queue = new List<Tuple<int, int, int>>();
+            expirationQueue = new List<Tuple<int, UserRequest>>();
             expirationTimer = new System.Timers.Timer();
             expirationTimer.AutoReset = true;
             expirationTimer.Elapsed += RequestExpired;
+            stopwatch = new Stopwatch();
 
             string Command;
             while (!SetUp.On()) ;
@@ -362,10 +266,8 @@ namespace ResRegV1cons
                         Console.WriteLine("Введите номер ресурса:");
                         Model.Occupy(Console.ReadLine());
 
-                        queue.Sort((x, y) => x.Item1.CompareTo(y.Item1));
-                        expirationTimer.Interval = queue[0].Item1 * 1000;
-                        expirationTimer.Start();
-
+                        resortExpirationQueue(true);
+                        stopwatch.Start();
                     }
 
                     if (Command == "FREE")
@@ -374,10 +276,8 @@ namespace ResRegV1cons
                         Console.WriteLine("Введите номер ресурса:");
                         Model.Free(Console.ReadLine());
 
-                        queue.Sort((x, y) => x.Item1.CompareTo(y.Item1));
-                        expirationTimer.Stop();
-                        expirationTimer.Interval = queue[0].Item1 * 1000; //TODO: проверить
-                        expirationTimer.Start();
+                        resortExpirationQueue(false);
+                        stopwatch.Start();
                     }
                 }
                 catch (OverflowException) { Console.WriteLine("Такого ресурса нет."); }
@@ -392,15 +292,68 @@ namespace ResRegV1cons
             while (Command != "");
         }
 
-        private static void pauseAll()
+        public static void resortExpirationQueue(bool lastIsNew)
         {
+            stopwatch.Stop();
+            int elapsedSec = stopwatch.Elapsed.Seconds;
+            stopwatch.Reset();
+            if (expirationQueue.Count == 0) return;
+
+            //TODO: сначала вычитать, потом добавлять новый,  потом вычитать
+
+            for (int i = 0; i < expirationQueue.Count - 1; i++)
+            {
+                expirationQueue[i] = new Tuple<int, UserRequest>(expirationQueue[i].Item1 - elapsedSec, expirationQueue[i].Item2);
+                if (expirationQueue[i].Item1 < 0) expirationQueue[i] = new Tuple<int, UserRequest>(0, expirationQueue[i].Item2);
+            }
+            if (!lastIsNew)
+            {
+                expirationQueue[expirationQueue.Count - 1] = new Tuple<int, UserRequest>(expirationQueue[expirationQueue.Count - 1].Item1 - elapsedSec, expirationQueue[expirationQueue.Count - 1].Item2);
+                if (expirationQueue[expirationQueue.Count - 1].Item1 < 0) expirationQueue[expirationQueue.Count - 1] = new Tuple<int, UserRequest>(0, expirationQueue[expirationQueue.Count - 1].Item2);
+            } //TODO: костыль
+
+            expirationQueue.Sort((x, y) => x.Item1.CompareTo(y.Item1));
+            expirationTimer.Stop();
+
+            /*if (expirationQueue[0].Item1 == 0)
+            {
+                deleteRequestFromExpirationQueue(expirationQueue[0].Item2);
+            }*/
+            expirationTimer.Interval = expirationQueue[0].Item1 * 1000; //TODO: проверить
+            expirationTimer.Start();
+
+            /*Console.WriteLine("Expiration Queue");
+            for(int i = 0; i < expirationQueue.Count; i++)
+            {
+                Console.WriteLine("id = " + expirationQueue[i].Item2.id + "; resourceId = " + expirationQueue[i].Item2.resourceId + "; time_remains " + expirationQueue[i].Item1);
+            }*/
+        }
+
+        public static void deleteRequestFromExpirationQueue(UserRequest request)
+        {
+            for (int i = 0; i < Program.expirationQueue.Count; i++) //Удаляем запрос из очереди на истечение
+            {
+                if (Program.expirationQueue[i].Item2 == Model.vRes_s[request.resourceId - 1].vReqQueue[0])
+                {
+                    Program.expirationQueue.RemoveAt(i);
+                    break;
+                }
+            }
+            resortExpirationQueue(false);
+            stopwatch.Start();
+        }
+
+        private static void pauseAll()
+        { 
             Console.WriteLine("Paused");
-            Program.isPaused = true;
+            isPaused = true;
+            expirationTimer.Stop();
+            stopwatch.Stop();
+
             for(int i = 0; i < Model.vRes_s.Count; i++)
             {
                 Model.vRes_s[i].stopwatch.Stop();
                 Model.vRes_s[i].timer.Enabled = false;
-                //Console.WriteLine("Ресурс " + i + " остановлен, stopwatch = " + Model.vRes_s[i].stopwatch.Elapsed);
             }
         }
 
@@ -410,16 +363,46 @@ namespace ResRegV1cons
             {
                 Model.vRes_s[i].timer.Enabled = true;
                 Model.vRes_s[i].timer.Interval = (Model.vRes_s[i].repairTimeSec - Model.vRes_s[i].stopwatch.Elapsed.Seconds) * 1000;
-                //Console.WriteLine("Ресурс " + i + " возобновлён, время ожидания = " + (Model.vRes_s[i].repairTimeSec - Model.vRes_s[i].stopwatch.Elapsed.Seconds) * 1000);
             }
-            Program.isPaused = false;
+
+            if (expirationQueue.Count > 0)
+            {
+                int elapsedSec = stopwatch.Elapsed.Seconds;
+                stopwatch.Reset();
+                for (int i = 0; i < expirationQueue.Count - 1; i++)
+                {
+                    expirationQueue[i] = new Tuple<int, UserRequest>(expirationQueue[i].Item1 - elapsedSec, expirationQueue[i].Item2);
+                    if(expirationQueue[i].Item1 < 0) expirationQueue[i] = new Tuple<int, UserRequest>(0, expirationQueue[i].Item2); //TODO: костыль
+                }
+
+                /*if(expirationQueue[0].Item1 == 0)
+                {
+                    deleteRequestFromExpirationQueue(expirationQueue[0].Item2);
+                }*/
+                expirationTimer.Interval = expirationQueue[0].Item1 * 1000; //TODO: проверить
+                expirationTimer.Start();
+                stopwatch.Start();
+            }
+
+            isPaused = false;
             Console.WriteLine("Resumed");
         }
 
         private static void RequestExpired(Object source, System.Timers.ElapsedEventArgs e)
         {
             pauseAll();
-            Console.WriteLine("Запрос истёк: id = " + Program.queue[0].Item2 + " ; ресурс, на который он был в очереди - " + Program.queue[0].Item3);
+            Console.WriteLine("Запрос истёк: id = " + Program.expirationQueue[0].Item2.id + " ; ресурс, на который он был в очереди: " + Program.expirationQueue[0].Item2.resourceId);
+            /*Console.WriteLine("Продлить запрос ещё на " + 30 + " секунд? Y/N");
+            if (Console.ReadLine().ToUpper() == "Y")
+            {
+                Program.expirationQueue[0] = new Tuple<int, UserRequest>(30, Program.expirationQueue[0].Item2);
+            }
+            else
+            {
+                Program.expirationQueue.RemoveAt(0);
+            }*/
+            Program.resortExpirationQueue(false);
+            Program.stopwatch.Start();
             resumeAll();
         }
     }

@@ -43,8 +43,11 @@
     <Reference Include="System.Xml" />
   </ItemGroup>
   <ItemGroup>
+    <Compile Include="ExpirationQueue.cs" />
+    <Compile Include="Resource.cs" />
     <Compile Include="Program.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
+    <Compile Include="UserRequest.cs" />
   </ItemGroup>
   <ItemGroup>
     <None Include="App.config" />
